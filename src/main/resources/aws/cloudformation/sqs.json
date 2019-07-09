@@ -1,0 +1,151 @@
+{
+   "AWSTemplateFormatVersion": "2010-09-09",
+   
+   "Description": "Creates AWS Resources (SQS Queue, DeadLetter Queue, Lambda and RDS Database)",
+   
+   "Parameters": {
+        "Environment": {
+            "Description": "Environment in which to manage queues",
+            "Type": "String",
+            "Default": "dev",
+            "AllowedValues": [ "dev", "qa", "int", "prod"]
+        }
+    },
+   
+   "Mappings": {
+        "EnvironmentOptions": {
+            "prod": {
+              "maxReceiveCount" : 10
+            },
+            "qa": {
+              "maxReceiveCount" : 5
+            },
+            "dev": {
+              "maxReceiveCount" : 2
+            },
+            "int": {
+              "maxReceiveCount" : 10
+            }
+        }
+    },
+   
+   
+   "Resources": {
+   
+   	"ShakeDeadQueue": {
+            "Type": "AWS::SQS::Queue",
+            "Properties": {
+                "ReceiveMessageWaitTimeSeconds": 20,
+                "VisibilityTimeout": 600,
+                "QueueName": {
+                    "Fn::Join": ["shake-n-bake-DLQ-", ["queue-", {
+                        "Ref": "Environment"
+                    }]]
+                }
+            }
+        },
+        
+        
+      "ShakeNBake": {
+      	"Type": "AWS::SQS::Queue",
+         "Properties": {
+         	"QueueName": {
+                    "Fn::Join": ["shake-n-bake-", ["queue-", {
+                        "Ref": "Environment"
+                    }]] 
+            },
+            "VisibilityTimeout": 600,
+            "ReceiveMessageWaitTimeSeconds": 20,
+            "RedrivePolicy": {
+                 "maxReceiveCount": 2,
+                 "deadLetterTargetArn": {
+                     "Fn::GetAtt": [ "ShakeDeadQueue", "Arn" ]
+                 }
+            }
+          }
+       },
+       
+      "CloudWatchEventRule": {
+            "Type": "AWS::Events::Rule",
+            "Properties": {
+                "Description": "A scheduled Rule to send SQS Message to Queue",
+                "Name": "post-sqs-msg-once-a-day",
+                "ScheduleExpression": "rate(1 minute)",
+                "State": "ENABLED",
+                "Targets": [{
+                    "Arn": {
+                        "Fn::GetAtt": ["ShakeNBake", "Arn"]
+                    },
+		    "Id": "DailyRule"
+                }]
+            }
+        },
+
+	"MyQueuePolicy": {
+		"DependsOn": ["ShakeNBake", "CloudWatchEventRule" ],
+		"Type": "AWS::SQS::QueuePolicy",
+		"Properties": {
+			"PolicyDocument": {
+				"Version": "2012-10-17",
+				"Id": "MyQueuePolicy",
+				"Statement": [{
+					"Effect": "Allow",
+					"Principal": {
+						"Service": ["events.amazonaws.com", "sqs.amazonaws.com"]
+					}
+
+				}],
+				"Action": "sqs:SendMessage",
+				"Resource": "*"
+			},
+			"Queues": [ 
+				{ "Fn::GetAtt": ["ShakeNBake", "Arn"] }
+			]
+		}
+	}
+      
+    },
+      
+      
+   "Outputs": {
+   
+      "QueueName": {
+         "Description": "This is the queue for the Shake and Bake Innovation",
+         "Value": {
+            "Fn::GetAtt": [
+               "ShakeNBake",
+               "QueueName"
+            ]
+         }
+      },
+      
+      "QueueURL": {
+         "Description": "The URL of the queue",
+         "Value": {
+            "Ref": "ShakeNBake"
+         }
+      },
+      
+      "QueueARN": {
+         "Description": "The ARN of the queue",
+         "Value": {
+            "Fn::GetAtt": [
+               "ShakeNBake",
+               "Arn"
+            ]
+         }
+      },
+      
+      "ShakeDeadLetterQueue": {
+            "Value": {
+                "Fn::GetAtt": [ "ShakeDeadQueue", "QueueName" ]
+            }
+      },
+      
+      "CloudWatchEventRule": {
+            "Value": {
+                "Fn::GetAtt": [ "CloudWatchEventRule", "Arn" ]
+            }
+      }
+   }
+}
